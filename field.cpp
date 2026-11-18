@@ -1245,6 +1245,333 @@ void field::next_player(uint8_t playerid) {
 	message->write<uint32_t>(player[playerid].start_lp);
 	player[playerid].recharge = false;
 }
+// ---------------------------------------------------------------------------------------------
+// Battle Royal (DUEL_BATTLE_ROYAL)
+//
+// 3-4 seats share the two engine slots. The engine always runs a normal 1v1 between slot 0 and
+// slot 1, so card scripts keep their "tp / 1-tp" view. A seat swap moves the WHOLE board of the
+// seat in a slot (deck, hand, Extra Deck, Monster/Spell & Trap Zones, GY, banished, LP, zone
+// bookkeeping, per-player turn counter) offstage and loads another seat's board in its place,
+// switching field effects off/on the same way tag_swap does for deck/hand/Extra Deck.
+// ---------------------------------------------------------------------------------------------
+namespace {
+template<typename A, typename B>
+void swap_board(A& a, B& b) {
+	std::swap(a.lp, b.lp);
+	std::swap(a.start_lp, b.start_lp);
+	std::swap(a.start_count, b.start_count);
+	std::swap(a.draw_count, b.draw_count);
+	std::swap(a.used_location, b.used_location);
+	std::swap(a.disabled_location, b.disabled_location);
+	std::swap(a.extra_p_count, b.extra_p_count);
+	std::swap(a.list_mzone, b.list_mzone);
+	std::swap(a.list_szone, b.list_szone);
+	std::swap(a.list_main, b.list_main);
+	std::swap(a.list_grave, b.list_grave);
+	std::swap(a.list_hand, b.list_hand);
+	std::swap(a.list_remove, b.list_remove);
+	std::swap(a.list_extra, b.list_extra);
+}
+// every card of a board; with_materials also adds the Xyz materials of its monsters/spells
+void collect_board(const player_info& p, card_vector& out, bool with_materials) {
+	for(auto* list : { &p.list_main, &p.list_hand, &p.list_extra, &p.list_grave, &p.list_remove })
+		out.insert(out.end(), list->begin(), list->end());
+	for(auto* list : { &p.list_mzone, &p.list_szone }) {
+		for(auto* pcard : *list) {
+			if(!pcard)
+				continue;
+			out.push_back(pcard);
+			if(with_materials)
+				out.insert(out.end(), pcard->xyz_materials.begin(), pcard->xyz_materials.end());
+		}
+	}
+}
+inline void flip_player(uint8_t& p) {
+	if(p < 2)
+		p = 1 - p;
+}
+}
+void field::battle_royal_init() {
+	// seat order = turn order: team 0 duelist 0, team 1 duelist 0, team 0 duelist 1, team 1 duelist 1...
+	// (duelist n > 0 of a team is extra list n - 1 of that team, filled through OCG_DuelNewCard)
+	const auto extra0 = player[0].extra_lists_main.size();
+	const auto extra1 = player[1].extra_lists_main.size();
+	br.seats.clear();
+	br.seats.resize(2);
+	for(uint8_t p = 0; p < 2; ++p) {
+		br.seats[p].slot = p;
+		br.seats[p].last_slot = p;
+		card_vector cards;
+		collect_board(player[p], cards, true);
+		for(auto* pcard : cards)
+			pcard->br_owner_seat = p;
+	}
+	for(size_t idx = 0; idx < std::max(extra0, extra1); ++idx) {
+		for(uint8_t team = 0; team < 2; ++team) {
+			auto& pl = player[team];
+			if(idx >= pl.extra_lists_main.size())
+				continue;
+			const auto seatid = static_cast<uint8_t>(br.seats.size());
+			br.seats.emplace_back();
+			auto& seat = br.seats.back();
+			seat.lp = pl.start_lp;
+			seat.start_lp = pl.start_lp;
+			seat.start_count = pl.start_count;
+			seat.draw_count = pl.draw_count;
+			seat.list_mzone.resize(7, nullptr);
+			seat.list_szone.resize(8, nullptr);
+			seat.list_main = std::move(pl.extra_lists_main[idx]);
+			seat.list_hand = std::move(pl.extra_lists_hand[idx]);
+			seat.list_extra = std::move(pl.extra_lists_extra[idx]);
+			seat.extra_p_count = pl.extra_extra_p_count[idx];
+			seat.slot = PLAYER_NONE;
+			seat.last_slot = team;
+			for(auto* list : { &seat.list_main, &seat.list_hand, &seat.list_extra }) {
+				for(auto* pcard : *list) {
+					pcard->br_owner_seat = seatid;
+					pcard->br_effect_enabled = true;
+				}
+			}
+		}
+	}
+	// the extra lists are consumed: tag_swap / relay never fire in a battle royal
+	for(auto& pl : player) {
+		pl.extra_lists_main.clear();
+		pl.extra_lists_hand.clear();
+		pl.extra_lists_extra.clear();
+		pl.extra_extra_p_count.clear();
+	}
+	br.slot_seat = { { 0, 1 } };
+	br.active_seat = 0;
+	br.target_seat = 1;
+	br.alive_count = static_cast<uint8_t>(br.seats.size());
+}
+uint8_t field::battle_royal_next_alive(uint8_t seat) const {
+	const auto count = br.seats.size();
+	for(size_t i = 1; i <= count; ++i) {
+		const auto s = static_cast<uint8_t>((seat + i) % count);
+		if(br.seats[s].alive)
+			return s;
+	}
+	return seat;
+}
+// true until the turn order comes back to a seat that already had a turn
+// (the last seat of the first round cannot attack either)
+bool field::battle_royal_first_round() const {
+	return !br.first_round_done;
+}
+// cards remember the seat that owns them; "owner" (a slot) must point at that seat's slot.
+// A card whose owner seat is offstage counts as owned by its controller's slot (known limit).
+void field::battle_royal_refresh_owners() {
+	for(uint8_t p = 0; p < 2; ++p) {
+		card_vector cards;
+		collect_board(player[p], cards, true);
+		for(auto* pcard : cards) {
+			const auto os = pcard->br_owner_seat;
+			if(os >= br.seats.size())
+				continue;
+			const auto slot = br.seats[os].slot;
+			pcard->owner = (slot != PLAYER_NONE) ? slot : p;
+		}
+	}
+}
+// Put seat "seatid" (offstage) into engine slot "slot"; the seat that sat there goes offstage.
+// MSG_SEAT_SWAP payload:
+//   u8 slot, u8 seat_in, u8 seat_out (0xff = none), u8 seat_count,
+//   i32 lp, u32 deck count, u32 hand count, u32 extra count, u32 extra_p_count (face-up pendulums),
+//   u32 GY count, u32 banished count, u32 used_location (zone bits of the slot after the swap)
+// The client/server re-queries the slot's locations afterwards (OCG_DuelQueryLocation), which
+// keeps hidden information hidden.
+void field::seat_swap(uint8_t slot, uint8_t seatid) {
+	if(slot > 1 || seatid >= br.seats.size())
+		return;
+	const auto out = br.slot_seat[slot];
+	if(out == seatid)
+		return;
+	auto& pl = player[slot];
+	auto& in_seat = br.seats[seatid];
+	// remember the owner seat of cards that do not have one yet (tokens, cards created mid-duel)
+	for(uint8_t p = 0; p < 2; ++p) {
+		card_vector cards;
+		collect_board(player[p], cards, true);
+		for(auto* pcard : cards) {
+			if(pcard->br_owner_seat == PLAYER_NONE && pcard->owner < 2)
+				pcard->br_owner_seat = br.slot_seat[pcard->owner];
+		}
+	}
+	card_vector cards;
+	if(out < br.seats.size()) {
+		collect_board(pl, cards, false);
+		for(auto* pcard : cards) {
+			pcard->br_effect_enabled = pcard->get_status(STATUS_EFFECT_ENABLED);
+			pcard->enable_field_effect(false);
+			pcard->cancel_field_effect();
+		}
+		auto& out_seat = br.seats[out];
+		swap_board(pl, out_seat);
+		out_seat.turn_count = infos.turn_id_by_player[slot];
+		out_seat.slot = PLAYER_NONE;
+		out_seat.last_slot = slot;
+	}
+	swap_board(pl, in_seat);
+	infos.turn_id_by_player[slot] = in_seat.turn_count;
+	in_seat.slot = slot;
+	br.slot_seat[slot] = seatid;
+	if(pl.list_mzone.size() < 7)
+		pl.list_mzone.resize(7, nullptr);
+	if(pl.list_szone.size() < 8)
+		pl.list_szone.resize(8, nullptr);
+	// the seat may come back in the other slot: every player reference of its cards follows it
+	const bool flip = in_seat.last_slot != slot;
+	in_seat.last_slot = slot;
+	cards.clear();
+	collect_board(pl, cards, true);
+	for(auto* pcard : cards) {
+		if(flip) {
+			flip_player(pcard->summon.player);
+			flip_player(pcard->attack_controler);
+			flip_player(pcard->previous.controler);
+			for(auto& eff : pcard->indexer)
+				flip_player(eff.first->effect_owner);
+		}
+		pcard->current.controler = slot;
+	}
+	battle_royal_refresh_owners();
+	for(auto* pcard : cards) {
+		if(pcard->current.location == LOCATION_OVERLAY)
+			continue;
+		pcard->apply_field_effect();
+		if(pcard->br_effect_enabled)
+			pcard->enable_field_effect(true);
+	}
+	auto message = pduel->new_message(MSG_SEAT_SWAP);
+	message->write<uint8_t>(slot);
+	message->write<uint8_t>(seatid);
+	message->write<uint8_t>(out < br.seats.size() ? out : 0xff);
+	message->write<uint8_t>(static_cast<uint8_t>(br.seats.size()));
+	message->write<int32_t>(pl.lp);
+	message->write<uint32_t>(static_cast<uint32_t>(pl.list_main.size()));
+	message->write<uint32_t>(static_cast<uint32_t>(pl.list_hand.size()));
+	message->write<uint32_t>(static_cast<uint32_t>(pl.list_extra.size()));
+	message->write<uint32_t>(pl.extra_p_count);
+	message->write<uint32_t>(static_cast<uint32_t>(pl.list_grave.size()));
+	message->write<uint32_t>(static_cast<uint32_t>(pl.list_remove.size()));
+	message->write<uint32_t>(pl.used_location);
+}
+// Turn start: the next living seat becomes the turn player, the next living seat after it is its
+// target (Phase 1 auto-target). The active seat keeps the slot it already sits in (with the
+// auto-target, last turn's target is this turn's active seat, so the usual slot alternation is
+// kept); seats only ever enter a slot from offstage.
+// MSG_SEAT_TURN payload:
+//   u8 turn slot, u8 active seat, u8 target seat, u8 seat count, u8 alive count,
+//   then per seat: u8 slot (0xff = offstage), u8 alive, u8 placement, i32 lp
+void field::battle_royal_turn_start(uint8_t& turn_player) {
+	auto& seats = br.seats;
+	uint8_t active, target;
+	if(infos.turn_id == 0) {
+		active = br.slot_seat[turn_player];
+		target = br.slot_seat[1 - turn_player];
+	} else {
+		active = battle_royal_next_alive(br.active_seat);
+		target = battle_royal_next_alive(active);
+		uint8_t tp = turn_player;
+		if(seats[active].slot != PLAYER_NONE)
+			tp = seats[active].slot;
+		else if(seats[target].slot != PLAYER_NONE)
+			tp = 1 - seats[target].slot;
+		if(br.slot_seat[tp] != active)
+			seat_swap(tp, active);
+		if(br.slot_seat[1 - tp] != target)
+			seat_swap(1 - tp, target);
+		turn_player = tp;
+	}
+	br.active_seat = active;
+	br.target_seat = target;
+	if(seats[active].had_turn)
+		br.first_round_done = true;
+	seats[active].had_turn = true;
+	auto message = pduel->new_message(MSG_SEAT_TURN);
+	message->write<uint8_t>(turn_player);
+	message->write<uint8_t>(active);
+	message->write<uint8_t>(target);
+	message->write<uint8_t>(static_cast<uint8_t>(seats.size()));
+	message->write<uint8_t>(br.alive_count);
+	for(const auto& seat : seats) {
+		message->write<uint8_t>(seat.slot != PLAYER_NONE ? seat.slot : 0xff);
+		message->write<uint8_t>(seat.alive);
+		message->write<uint8_t>(seat.placement);
+		message->write<int32_t>(seat.slot != PLAYER_NONE ? player[seat.slot].lp : seat.lp);
+	}
+}
+// Replaces the 2-player win check. A seat in a slot that hits 0 LP or decks out is eliminated
+// (MSG_SEAT_ELIMINATED) and the turn ends (like a relay duel); its board goes offstage for good at
+// the next turn start. MSG_WIN (with the winner's slot) is sent only when one seat is left.
+// MSG_SEAT_ELIMINATED payload: u8 seat, u8 slot, u8 reason (1 = LP, 2 = deck), u8 placement, u8 seats left
+void field::battle_royal_win_check() {
+	if(core.win_player != 5) { // Duel.Win (alternate win conditions) still ends the whole duel
+		auto message = pduel->new_message(MSG_WIN);
+		message->write<uint8_t>(core.win_player);
+		message->write<uint8_t>(core.win_reason);
+		core.win_player = 5;
+		core.win_reason = 0;
+		core.overdraw[0] = core.overdraw[1] = false;
+		return;
+	}
+	uint8_t reason[2]{ 0, 0 };
+	uint8_t lost = 0;
+	for(uint8_t p = 0; p < 2; ++p) {
+		const auto s = br.slot_seat[p];
+		if(s >= br.seats.size() || !br.seats[s].alive) {
+			core.overdraw[p] = false;
+			continue;
+		}
+		if(player[p].lp <= 0 && !is_player_affected_by_effect(p, EFFECT_CANNOT_LOSE_LP))
+			reason[p] = 1;
+		else if(core.overdraw[p] && !is_player_affected_by_effect(p, EFFECT_CANNOT_LOSE_DECK))
+			reason[p] = 2;
+		if(reason[p]) {
+			core.overdraw[p] = false;
+			++lost;
+		}
+	}
+	if(!lost)
+		return;
+	const auto left = static_cast<uint8_t>(br.alive_count - lost);
+	uint8_t rea = 1;
+	for(uint8_t p = 0; p < 2; ++p) {
+		if(!reason[p])
+			continue;
+		auto& seat = br.seats[br.slot_seat[p]];
+		seat.alive = false;
+		seat.placement = left + 1;
+		rea = reason[p];
+		auto message = pduel->new_message(MSG_SEAT_ELIMINATED);
+		message->write<uint8_t>(br.slot_seat[p]);
+		message->write<uint8_t>(p);
+		message->write<uint8_t>(reason[p]);
+		message->write<uint8_t>(seat.placement);
+		message->write<uint8_t>(left);
+	}
+	br.alive_count = left;
+	if(left >= 2) {
+		core.force_turn_end = true;
+		return;
+	}
+	uint8_t winp = PLAYER_NONE;
+	if(left == 1) {
+		uint8_t survivor = 0;
+		while(survivor < br.seats.size() && !br.seats[survivor].alive)
+			++survivor;
+		br.seats[survivor].placement = 1;
+		if(br.seats[survivor].slot == PLAYER_NONE) // both seats on the field fell at once
+			seat_swap(0, survivor);
+		winp = br.seats[survivor].slot;
+	}
+	auto message = pduel->new_message(MSG_WIN);
+	message->write<uint8_t>(winp);
+	message->write<uint8_t>(rea);
+	core.overdraw[0] = core.overdraw[1] = false;
+}
 bool field::is_flag(uint64_t flag) const {
 	return (core.duel_options & flag) == flag;
 }

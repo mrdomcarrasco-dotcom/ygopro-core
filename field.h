@@ -113,6 +113,39 @@ struct player_info {
 		list_extra.reserve(15);
 	}
 };
+// Battle Royal (DUEL_BATTLE_ROYAL): the complete board of one duelist ("seat").
+// While a seat sits in an engine slot (player[0] / player[1]) its board lives in that player_info
+// and the seat's own lists are empty; while it is offstage the board is stored here.
+struct br_seat {
+	int32_t lp{ 0 };
+	int32_t start_lp{ 0 };
+	int32_t start_count{ 0 };
+	int32_t draw_count{ 0 };
+	uint32_t used_location{ 0 };
+	uint32_t disabled_location{ 0 };
+	uint32_t extra_p_count{ 0 };
+	int16_t turn_count{ 0 };
+	card_vector list_mzone;
+	card_vector list_szone;
+	card_vector list_main;
+	card_vector list_grave;
+	card_vector list_hand;
+	card_vector list_remove;
+	card_vector list_extra;
+	uint8_t slot{ PLAYER_NONE }; // engine slot the seat sits in, PLAYER_NONE when offstage
+	uint8_t last_slot{ 0 }; // slot its cards' player references (controler, summon player...) are relative to
+	uint8_t placement{ 0 }; // final placement (1 = winner), 0 while still in the duel
+	bool alive{ true };
+	bool had_turn{ false };
+};
+struct battle_royal_info {
+	std::vector<br_seat> seats;
+	std::array<uint8_t, 2> slot_seat{ { 0, 1 } };
+	uint8_t active_seat{ 0 };
+	uint8_t target_seat{ 1 };
+	uint8_t alive_count{ 0 };
+	bool first_round_done{ false }; // every seat has finished its first turn
+};
 struct field_effect {
 	using oath_effects = std::unordered_map<effect*, effect*>;
 	using effect_collection = std::unordered_set<effect*>;
@@ -452,6 +485,16 @@ public:
 	void tag_swap(uint8_t playerid);
 	bool relay_check(uint8_t playerid);
 	void next_player(uint8_t playerid);
+	// Battle Royal (DUEL_BATTLE_ROYAL)
+	battle_royal_info br;
+	bool is_battle_royal() const { return !br.seats.empty(); }
+	void battle_royal_init();
+	void seat_swap(uint8_t slot, uint8_t seat);
+	void battle_royal_turn_start(uint8_t& turn_player);
+	void battle_royal_win_check();
+	bool battle_royal_first_round() const;
+	uint8_t battle_royal_next_alive(uint8_t seat) const;
+	void battle_royal_refresh_owners();
 
 	bool is_flag(uint64_t flag) const;
 	bool has_separate_pzone(uint8_t p) const;

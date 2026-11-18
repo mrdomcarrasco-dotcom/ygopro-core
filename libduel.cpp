@@ -70,6 +70,27 @@ LUA_STATIC_FUNCTION(GetTurnCount) {
 		lua_pushinteger(L, pduel->game_field->infos.turn_id);
 	return 1;
 }
+// Battle Royal: seat sitting in slot (player) p; nil outside a battle royal
+LUA_STATIC_FUNCTION(GetBattleRoyalSeat) {
+	check_param_count(L, 1);
+	auto playerid = lua_get<uint8_t>(L, 1);
+	const auto& br = pduel->game_field->br;
+	if(br.seats.empty() || playerid > 1)
+		return 0;
+	lua_pushinteger(L, br.slot_seat[playerid]);
+	return 1;
+}
+// Battle Royal: seat count, seats still alive, active seat, its target; nothing outside a battle royal
+LUA_STATIC_FUNCTION(GetBattleRoyalInfo) {
+	const auto& br = pduel->game_field->br;
+	if(br.seats.empty())
+		return 0;
+	lua_pushinteger(L, br.seats.size());
+	lua_pushinteger(L, br.alive_count);
+	lua_pushinteger(L, br.active_seat);
+	lua_pushinteger(L, br.target_seat);
+	return 4;
+}
 LUA_STATIC_FUNCTION(GetDrawCount) {
 	check_param_count(L, 1);
 	auto playerid = lua_get<uint8_t>(L, 1);

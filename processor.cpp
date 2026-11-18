@@ -1460,7 +1460,9 @@ bool field::process(Processors::IdleCommand& arg) {
 		}
 		core.to_bp = true;
 		core.to_ep = true;
-		if((!is_flag(DUEL_ATTACK_FIRST_TURN) && infos.turn_id == 1 && !(is_player_affected_by_effect(infos.turn_player, EFFECT_BP_FIRST_TURN))) || infos.phase == PHASE_MAIN2 || is_player_affected_by_effect(infos.turn_player, EFFECT_CANNOT_BP) || core.force_turn_end)
+		// battle royal: nobody attacks until every seat has had a turn
+		const bool no_bp_first_turn = is_battle_royal() ? battle_royal_first_round() : (!is_flag(DUEL_ATTACK_FIRST_TURN) && infos.turn_id == 1);
+		if((no_bp_first_turn && !(is_player_affected_by_effect(infos.turn_player, EFFECT_BP_FIRST_TURN))) || infos.phase == PHASE_MAIN2 || is_player_affected_by_effect(infos.turn_player, EFFECT_CANNOT_BP) || core.force_turn_end)
 			core.to_bp = false;
 		if(infos.phase == PHASE_MAIN1) {
 			for(auto& pcard : player[infos.turn_player].list_mzone) {
@@ -3258,6 +3260,9 @@ bool field::process(Processors::Turn& arg) {
 	const auto& turn_player = arg.turn_player;
 	switch(arg.step) {
 	case 0: {
+		// battle royal: seat the next living duelist in the turn player's slot, its target in the other
+		if(is_battle_royal())
+			battle_royal_turn_start(arg.turn_player);
 		//Pre Draw
 		core.used_event.clear();
 		for(auto& peffect : core.reseted_effects) {
@@ -3333,7 +3338,7 @@ bool field::process(Processors::Turn& arg) {
 		infos.turn_player = turn_player;
 		auto message = pduel->new_message(MSG_NEW_TURN);
 		message->write<uint8_t>(turn_player);
-		if(!is_flag(DUEL_RELAY) && infos.turn_id != 1)
+		if(!is_flag(DUEL_RELAY) && !is_battle_royal() && infos.turn_id != 1)
 			tag_swap(turn_player);
 		if(is_player_affected_by_effect(infos.turn_player, EFFECT_SKIP_TURN)) {
 			arg.step = 18;
@@ -4380,7 +4385,9 @@ int32_t field::break_effect(bool clear_sent) {
 	}
 	core.used_event.splice(core.used_event.end(), core.instant_event);
 	adjust_instant();
-	if(!is_flag(DUEL_RELAY) && !core.force_turn_end) {
+	if(is_battle_royal()) {
+		battle_royal_win_check();
+	} else if(!is_flag(DUEL_RELAY) && !core.force_turn_end) {
 		uint32_t winp = 5, rea = 1;
 		if(player[0].lp <= 0 && player[1].lp > 0 && !is_player_affected_by_effect(0, EFFECT_CANNOT_LOSE_LP)) {
 			winp = 1;
@@ -4654,7 +4661,9 @@ bool field::process(Processors::Adjust& arg) {
 	}
 	case 1: {
 		//win check(deck=0 or lp=0)
-		if(!core.force_turn_end){
+		if(is_battle_royal()) {
+			battle_royal_win_check();
+		} else if(!core.force_turn_end){
 			uint32_t winp = 5, rea = 1;
 			if (player[0].lp <= 0 && player[1].lp > 0 && !is_player_affected_by_effect(0, EFFECT_CANNOT_LOSE_LP)) {
 				winp = 1;
@@ -5039,6 +5048,8 @@ bool field::process(Processors::Startup& arg) {
 
 			}
 		}
+		if(is_flag(DUEL_BATTLE_ROYAL))
+			battle_royal_init();
 		emplace_process<Processors::Turn>(0);
 		return TRUE;
 	}

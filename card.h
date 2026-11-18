@@ -118,6 +118,8 @@ public:
 	card_state temp{};
 	card_state current{};
 	uint8_t owner{ PLAYER_NONE };
+	uint8_t br_owner_seat{ PLAYER_NONE }; // battle royal: seat that owns the card (PLAYER_NONE = not assigned yet)
+	bool br_effect_enabled{ true }; // battle royal: STATUS_EFFECT_ENABLED when the card went offstage
 	struct summon_info {
 		uint32_t type{};
 		uint8_t player{};

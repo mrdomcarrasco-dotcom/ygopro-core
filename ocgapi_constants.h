@@ -296,6 +296,10 @@
 #define MSG_AI_NAME              163
 #define MSG_SHOW_HINT            164
 #define MSG_PLAYER_HINT          165
+/* Battle Royal messages (DUEL_BATTLE_ROYAL), see field::seat_swap / field::battle_royal_* */
+#define MSG_SEAT_SWAP            166
+#define MSG_SEAT_TURN            167
+#define MSG_SEAT_ELIMINATED      168
 #define MSG_MATCH_KILL           170
 #define MSG_CUSTOM_MSG           180
 #define MSG_REMOVE_CARDS         190
@@ -413,6 +417,13 @@
 #define DUEL_TCG_FAST_EFFECT_IGNITION 0x400000000
 #define DUEL_EXTRA_DECK_RITUAL 0x800000000
 #define DUEL_NORMAL_SUMMON_FACEUP_DEF 0x1000000000
+/* Battle Royal: 3-4 duelists ("seats") free-for-all. Seats are added like tag duelists
+   (team 0 duelist 0 = seat 0, team 1 duelist 0 = seat 1, team 0 duelist 1 = seat 2,
+   team 1 duelist 1 = seat 3) and take turns in seat order. At every moment the engine runs a
+   normal 1v1 between the two "slots" (players 0 and 1): the turn player's slot holds the active
+   seat and the other slot holds its target; every other seat's whole board is stored offstage.
+   Mutually exclusive with DUEL_RELAY and with normal tag duels. */
+#define DUEL_BATTLE_ROYAL      0x2000000000
 #define DUEL_MODE_SPEED        (DUEL_3_COLUMNS_FIELD | DUEL_NO_MAIN_PHASE_2 | DUEL_TRAP_MONSTERS_NOT_USE_ZONE | DUEL_TRIGGER_ONLY_IN_LOCATION)
 #define DUEL_MODE_RUSH         (DUEL_3_COLUMNS_FIELD | DUEL_NO_MAIN_PHASE_2 | DUEL_NO_STANDBY_PHASE | DUEL_1ST_TURN_DRAW | DUEL_INVERTED_QUICK_PRIORITY | DUEL_DRAW_UNTIL_5 | DUEL_NO_HAND_LIMIT | DUEL_UNLIMITED_SUMMONS | DUEL_TRAP_MONSTERS_NOT_USE_ZONE | DUEL_TRIGGER_ONLY_IN_LOCATION | DUEL_EXTRA_DECK_RITUAL)
 #define DUEL_MODE_MR1          (DUEL_OCG_OBSOLETE_IGNITION | DUEL_1ST_TURN_DRAW | DUEL_1_FACEUP_FIELD | DUEL_SPSUMMON_ONCE_OLD_NEGATE | DUEL_RETURN_TO_DECK_TRIGGERS | DUEL_CANNOT_SUMMON_OATH_OLD)
