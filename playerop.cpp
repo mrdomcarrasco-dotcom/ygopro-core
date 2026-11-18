@@ -55,6 +55,9 @@ bool field::process(Processors::SelectBattleCmd& arg) {
 	} else {
 		uint32_t t = returns.at<int32_t>(0) & 0xffff;
 		uint32_t s = returns.at<int32_t>(0) >> 16;
+		// battle royal: 4 = switch the target to seat s before the next attack
+		if(t == 4 && battle_royal_can_target(static_cast<uint8_t>(s)))
+			return TRUE;
 		if(t > 3
 		   || (t == 0 && s >= core.select_chains.size())
 		   || (t == 1 && s >= core.attackable_cards.size())
@@ -141,6 +144,9 @@ bool field::process(Processors::SelectIdleCmd& arg) {
 	} else {
 		uint32_t t = returns.at<int32_t>(0) & 0xffff;
 		uint32_t s = returns.at<int32_t>(0) >> 16;
+		// battle royal: 9 = switch the target to seat s
+		if(t == 9 && battle_royal_can_target(static_cast<uint8_t>(s)))
+			return TRUE;
 		if(t > 8
 		   || (t == 0 && s >= core.summonable_cards.size())
 		   || (t == 1 && s >= core.spsummonable_cards.size())

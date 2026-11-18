@@ -147,6 +147,7 @@ struct battle_royal_info {
 	uint8_t alive_count{ 0 };
 	bool first_round_done{ false }; // every seat has finished its first turn
 	bool teams{ false }; // DUEL_BATTLE_ROYAL_TEAMS
+	uint8_t turn_slot{ 0 }; // engine slot of the turn player (MSG_SEAT_TURN / MSG_SEAT_TARGET)
 };
 struct field_effect {
 	using oath_effects = std::unordered_map<effect*, effect*>;
@@ -498,6 +499,11 @@ public:
 	uint8_t battle_royal_next_alive(uint8_t seat) const;
 	uint8_t battle_royal_next_target(uint8_t active) const;
 	void battle_royal_refresh_owners();
+	bool battle_royal_can_target(uint8_t seat) const;
+	void battle_royal_retarget(uint8_t seat);
+	bool battle_royal_fix_target();
+	void battle_royal_write_state(uint8_t msgid);
+	void battle_royal_send_board(uint8_t seat);
 
 	bool is_flag(uint64_t flag) const;
 	bool has_separate_pzone(uint8_t p) const;

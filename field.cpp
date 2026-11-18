@@ -4,6 +4,8 @@
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+#include <cstring> //std::memcpy
+#include <iterator> //std::size
 #include <algorithm> //std::sort, std::swap, std::find, std::find_if, std::min, std::none_of
 #include <tuple> //std::tie
 #include <utility> //std::move
@@ -1348,6 +1350,9 @@ void field::battle_royal_init() {
 	br.target_seat = 1;
 	br.alive_count = static_cast<uint8_t>(br.seats.size());
 	br.teams = is_flag(DUEL_BATTLE_ROYAL_TEAMS);
+	// the seats that start offstage: their (hand/deck/Extra Deck only) boards
+	for(uint8_t s = 2; s < br.seats.size(); ++s)
+		battle_royal_send_board(s);
 }
 // the seat "active" attacks: the next living seat in turn order, skipping its teammates in a team battle royal
 uint8_t field::battle_royal_next_target(uint8_t active) const {
@@ -1416,6 +1421,8 @@ void field::seat_swap(uint8_t slot, uint8_t seatid) {
 	}
 	card_vector cards;
 	if(out < br.seats.size()) {
+		// public snapshot of the leaving board while its effects are still applied (ATK/DEF as they were)
+		battle_royal_send_board(out);
 		collect_board(pl, cards, false);
 		for(auto* pcard : cards) {
 			pcard->br_effect_enabled = pcard->get_status(STATUS_EFFECT_ENABLED);
@@ -1502,21 +1509,130 @@ void field::battle_royal_turn_start(uint8_t& turn_player) {
 	}
 	br.active_seat = active;
 	br.target_seat = target;
+	br.turn_slot = turn_player;
 	if(seats[active].had_turn)
 		br.first_round_done = true;
 	seats[active].had_turn = true;
-	auto message = pduel->new_message(MSG_SEAT_TURN);
-	message->write<uint8_t>(turn_player);
-	message->write<uint8_t>(active);
-	message->write<uint8_t>(target);
-	message->write<uint8_t>(static_cast<uint8_t>(seats.size()));
+	battle_royal_write_state(MSG_SEAT_TURN);
+}
+// MSG_SEAT_TURN / MSG_SEAT_TARGET payload (same layout):
+//   u8 turn slot, u8 active seat, u8 target seat, u8 seat count, u8 alive count,
+//   then per seat: u8 slot (0xff = offstage), u8 alive, u8 placement, i32 lp
+void field::battle_royal_write_state(uint8_t msgid) {
+	auto message = pduel->new_message(msgid);
+	message->write<uint8_t>(br.turn_slot);
+	message->write<uint8_t>(br.active_seat);
+	message->write<uint8_t>(br.target_seat);
+	message->write<uint8_t>(static_cast<uint8_t>(br.seats.size()));
 	message->write<uint8_t>(br.alive_count);
-	for(const auto& seat : seats) {
+	for(const auto& seat : br.seats) {
 		message->write<uint8_t>(seat.slot != PLAYER_NONE ? seat.slot : 0xff);
 		message->write<uint8_t>(seat.alive);
 		message->write<uint8_t>(seat.placement);
 		message->write<int32_t>(seat.slot != PLAYER_NONE ? player[seat.slot].lp : seat.lp);
 	}
+}
+// May the turn player switch its target to this seat? (alive, not itself, not a teammate, not the current target)
+bool field::battle_royal_can_target(uint8_t seat) const {
+	if(!is_battle_royal() || seat >= br.seats.size())
+		return false;
+	if(seat == br.active_seat || seat == br.target_seat || !br.seats[seat].alive)
+		return false;
+	if(br.teams && br.seats[seat].team == br.seats[br.active_seat].team)
+		return false;
+	return br.seats[br.active_seat].alive;
+}
+// Free targeting: the turn player brings another seat into the target slot (open game state, empty chain:
+// Main Phase 1/2 idle and the Battle Phase command). The old target's board goes offstage frozen.
+void field::battle_royal_retarget(uint8_t seat) {
+	if(!battle_royal_can_target(seat))
+		return;
+	seat_swap(1 - infos.turn_player, seat);
+	br.target_seat = seat;
+	battle_royal_write_state(MSG_SEAT_TARGET);
+	adjust_all();
+}
+// The target fell during this turn: bring the next living opponent in (at the next open game state) so the
+// turn player can go on. Returns true when it swapped.
+bool field::battle_royal_fix_target() {
+	if(!is_battle_royal() || br.target_seat >= br.seats.size() || br.seats[br.target_seat].alive)
+		return false;
+	if(!br.seats[br.active_seat].alive)
+		return false;
+	const auto next = battle_royal_next_target(br.active_seat);
+	if(next == br.active_seat || !br.seats[next].alive || next == br.target_seat)
+		return false;
+	if(br.teams && br.seats[next].team == br.seats[br.active_seat].team)
+		return false;
+	seat_swap(1 - infos.turn_player, next);
+	br.target_seat = next;
+	battle_royal_write_state(MSG_SEAT_TARGET);
+	adjust_all();
+	return true;
+}
+// MSG_SEAT_BOARD: a seat's public board (sent before it goes offstage, and at the start for seats that start
+// offstage). Payload:
+//   u8 seat, u8 alive, u8 placement, i32 lp, u32 deck, u32 hand, u32 extra, u32 extra_p_count, u32 grave,
+//   u32 banished, u8 block count, then per block: u8 location, u32 length, OCG_DuelQueryLocation bytes
+//   (u32 size + one query per card / empty zone) for MZONE, SZONE, HAND, GRAVE, REMOVED, EXTRA.
+// The query holds private data (hand, face-down cards); the server strips it for everyone but the seat.
+void field::battle_royal_send_board(uint8_t seatid) {
+	if(seatid >= br.seats.size())
+		return;
+	auto& seat = br.seats[seatid];
+	const bool onstage = seat.slot < 2;
+	const auto& pl = onstage ? player[seat.slot] : player[0];
+	const card_vector& mz = onstage ? pl.list_mzone : seat.list_mzone;
+	const card_vector& sz = onstage ? pl.list_szone : seat.list_szone;
+	const card_vector& hd = onstage ? pl.list_hand : seat.list_hand;
+	const card_vector& gy = onstage ? pl.list_grave : seat.list_grave;
+	const card_vector& rm = onstage ? pl.list_remove : seat.list_remove;
+	const card_vector& ex = onstage ? pl.list_extra : seat.list_extra;
+	const card_vector& dk = onstage ? pl.list_main : seat.list_main;
+	auto message = pduel->new_message(MSG_SEAT_BOARD);
+	message->write<uint8_t>(seatid);
+	message->write<uint8_t>(seat.alive);
+	message->write<uint8_t>(seat.placement);
+	message->write<int32_t>(onstage ? pl.lp : seat.lp);
+	message->write<uint32_t>(static_cast<uint32_t>(dk.size()));
+	message->write<uint32_t>(static_cast<uint32_t>(hd.size()));
+	message->write<uint32_t>(static_cast<uint32_t>(ex.size()));
+	message->write<uint32_t>(onstage ? pl.extra_p_count : seat.extra_p_count);
+	message->write<uint32_t>(static_cast<uint32_t>(gy.size()));
+	message->write<uint32_t>(static_cast<uint32_t>(rm.size()));
+	// no reason/equip/target card links: they point at other boards
+	static constexpr uint32_t base = 0x3881fff & ~(QUERY_REASON_CARD | QUERY_EQUIP_CARD | QUERY_TARGET_CARD);
+	struct block { uint8_t loc; const card_vector* list; uint32_t flags; };
+	const block blocks[]{
+		{ LOCATION_MZONE, &mz, base | QUERY_OVERLAY_CARD | QUERY_COUNTERS },
+		{ LOCATION_SZONE, &sz, (0x3e81fff & ~(QUERY_REASON_CARD | QUERY_EQUIP_CARD | QUERY_TARGET_CARD)) | QUERY_COUNTERS },
+		{ LOCATION_HAND, &hd, 0x3781fff & ~(QUERY_REASON_CARD | QUERY_EQUIP_CARD | QUERY_TARGET_CARD) },
+		{ LOCATION_GRAVE, &gy, 0x381fff & ~(QUERY_REASON_CARD | QUERY_EQUIP_CARD | QUERY_TARGET_CARD) },
+		{ LOCATION_REMOVED, &rm, 0x381fff & ~(QUERY_REASON_CARD | QUERY_EQUIP_CARD | QUERY_TARGET_CARD) },
+		{ LOCATION_EXTRA, &ex, 0x381fff & ~(QUERY_REASON_CARD | QUERY_EQUIP_CARD | QUERY_TARGET_CARD) },
+	};
+	message->write<uint8_t>(static_cast<uint8_t>(std::size(blocks)));
+	auto saved = std::move(pduel->query_buffer);
+	for(const auto& b : blocks) {
+		pduel->query_buffer.clear();
+		for(auto* pcard : *b.list) {
+			if(pcard == nullptr) {
+				const int16_t zero = 0;
+				const auto sz0 = pduel->query_buffer.size();
+				pduel->query_buffer.resize(sz0 + sizeof(zero));
+				std::memcpy(&pduel->query_buffer[sz0], &zero, sizeof(zero));
+			} else {
+				pcard->get_infos(b.flags);
+			}
+		}
+		const auto body = static_cast<uint32_t>(pduel->query_buffer.size());
+		message->write<uint8_t>(b.loc);
+		message->write<uint32_t>(body + sizeof(uint32_t));
+		message->write<uint32_t>(body);
+		if(body)
+			message->write(pduel->query_buffer.data(), body);
+	}
+	pduel->query_buffer = std::move(saved);
 }
 // Replaces the 2-player win check. A seat in a slot that hits 0 LP or decks out is eliminated
 // (MSG_SEAT_ELIMINATED) and the turn ends (like a relay duel); its board goes offstage for good at
@@ -1583,7 +1699,10 @@ void field::battle_royal_win_check() {
 		}
 	}
 	if(!over) {
-		core.force_turn_end = true;
+		// the turn goes on when only the target fell: the next open game state brings a new target in
+		// (battle_royal_fix_target); the turn ends when the turn player itself is out
+		if(reason[infos.turn_player] || br.slot_seat[infos.turn_player] != br.active_seat)
+			core.force_turn_end = true;
 		return;
 	}
 	uint8_t winp = PLAYER_NONE;

@@ -300,6 +300,9 @@
 #define MSG_SEAT_SWAP            166
 #define MSG_SEAT_TURN            167
 #define MSG_SEAT_ELIMINATED      168
+/* 169 = MSG_SEAT_INFO (made by the EDOPRO server) */
+#define MSG_SEAT_TARGET          171
+#define MSG_SEAT_BOARD           172
 #define MSG_MATCH_KILL           170
 #define MSG_CUSTOM_MSG           180
 #define MSG_REMOVE_CARDS         190

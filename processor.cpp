@@ -1449,6 +1449,11 @@ int32_t field::process_single_event(effect* peffect, const tevent& e, chain_list
 bool field::process(Processors::IdleCommand& arg) {
 	switch(arg.step) {
 	case 0: {
+		// battle royal: the target fell earlier this turn, bring the next opponent in
+		if(battle_royal_fix_target()) {
+			arg.step = Processors::restart;
+			return FALSE;
+		}
 		bool must_attack = false;
 		core.select_chains.clear();
 		nil_event.event_code = EVENT_FREE_CHAIN;
@@ -1635,6 +1640,12 @@ bool field::process(Processors::IdleCommand& arg) {
 		} else if(ctype == 4) {
 			arg.step = 8;
 			return FALSE;
+		} else if(ctype == 9) {
+			// battle royal: switch the target (validated in SelectIdleCmd)
+			core.select_chains.clear();
+			battle_royal_retarget(static_cast<uint8_t>(sel));
+			arg.step = Processors::restart;
+			return FALSE;
 		} else if (ctype == 8) {
 			arg.step = Processors::restart;
 			shuffle(infos.turn_player, LOCATION_HAND);
@@ -1799,6 +1810,11 @@ bool field::process(Processors::BattleCommand& arg) {
 		core.attack_player = FALSE;
 		core.attacker = nullptr;
 		core.attack_target = nullptr;
+		// battle royal: the target fell in the last battle, bring the next opponent in
+		if(!core.force_turn_end && battle_royal_fix_target()) {
+			arg.step = Processors::restart;
+			return FALSE;
+		}
 		if(auto peffect = is_player_affected_by_effect(infos.turn_player, EFFECT_SKIP_BP); peffect != nullptr || core.force_turn_end) {
 			arg.step = 41;
 			arg.phase_to_change_to = 2;
@@ -1877,6 +1893,15 @@ bool field::process(Processors::BattleCommand& arg) {
 	case 1: {
 		int32_t ctype = returns.at<int32_t>(0) & 0xffff;
 		int32_t sel = returns.at<int32_t>(0) >> 16;
+		if(ctype == 4 && is_battle_royal()) {
+			// battle royal: switch the target before the next attack (validated in SelectBattleCmd;
+			// ignored during a forced attack)
+			core.select_chains.clear();
+			if(!arg.forced_attack_done && !arg.forced_attack)
+				battle_royal_retarget(static_cast<uint8_t>(sel));
+			arg.step = Processors::restart;
+			return FALSE;
+		}
 		if(arg.forced_attack_done || (ctype != 0 && ctype != 1)) {
 			arg.step = 39;
 			// ignored when arg.forced_attack_done, so can be anything
