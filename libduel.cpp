@@ -80,6 +80,18 @@ LUA_STATIC_FUNCTION(GetBattleRoyalSeat) {
 	lua_pushinteger(L, br.slot_seat[playerid]);
 	return 1;
 }
+// Battle Royal: team of the seat sitting in slot (player) p (DUEL_BATTLE_ROYAL_TEAMS: 0/1, else the seat
+// number, so "same team" means "same seat"); nil outside a battle royal
+LUA_STATIC_FUNCTION(GetBattleRoyalTeam) {
+	check_param_count(L, 1);
+	auto playerid = lua_get<uint8_t>(L, 1);
+	const auto& br = pduel->game_field->br;
+	if(br.seats.empty() || playerid > 1)
+		return 0;
+	const auto seat = br.slot_seat[playerid];
+	lua_pushinteger(L, br.teams ? br.seats[seat].team : seat);
+	return 1;
+}
 // Battle Royal: seat count, seats still alive, active seat, its target; nothing outside a battle royal
 LUA_STATIC_FUNCTION(GetBattleRoyalInfo) {
 	const auto& br = pduel->game_field->br;

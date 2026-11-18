@@ -136,6 +136,7 @@ struct br_seat {
 	uint8_t last_slot{ 0 }; // slot its cards' player references (controler, summon player...) are relative to
 	uint8_t placement{ 0 }; // final placement (1 = winner), 0 while still in the duel
 	bool alive{ true };
+	uint8_t team{ 0 }; // team the seat was added with (DUEL_BATTLE_ROYAL_TEAMS)
 	bool had_turn{ false };
 };
 struct battle_royal_info {
@@ -145,6 +146,7 @@ struct battle_royal_info {
 	uint8_t target_seat{ 1 };
 	uint8_t alive_count{ 0 };
 	bool first_round_done{ false }; // every seat has finished its first turn
+	bool teams{ false }; // DUEL_BATTLE_ROYAL_TEAMS
 };
 struct field_effect {
 	using oath_effects = std::unordered_map<effect*, effect*>;
@@ -494,6 +496,7 @@ public:
 	void battle_royal_win_check();
 	bool battle_royal_first_round() const;
 	uint8_t battle_royal_next_alive(uint8_t seat) const;
+	uint8_t battle_royal_next_target(uint8_t active) const;
 	void battle_royal_refresh_owners();
 
 	bool is_flag(uint64_t flag) const;

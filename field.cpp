@@ -1301,6 +1301,7 @@ void field::battle_royal_init() {
 	for(uint8_t p = 0; p < 2; ++p) {
 		br.seats[p].slot = p;
 		br.seats[p].last_slot = p;
+		br.seats[p].team = p;
 		card_vector cards;
 		collect_board(player[p], cards, true);
 		for(auto* pcard : cards)
@@ -1326,6 +1327,7 @@ void field::battle_royal_init() {
 			seat.extra_p_count = pl.extra_extra_p_count[idx];
 			seat.slot = PLAYER_NONE;
 			seat.last_slot = team;
+			seat.team = team;
 			for(auto* list : { &seat.list_main, &seat.list_hand, &seat.list_extra }) {
 				for(auto* pcard : *list) {
 					pcard->br_owner_seat = seatid;
@@ -1345,6 +1347,19 @@ void field::battle_royal_init() {
 	br.active_seat = 0;
 	br.target_seat = 1;
 	br.alive_count = static_cast<uint8_t>(br.seats.size());
+	br.teams = is_flag(DUEL_BATTLE_ROYAL_TEAMS);
+}
+// the seat "active" attacks: the next living seat in turn order, skipping its teammates in a team battle royal
+uint8_t field::battle_royal_next_target(uint8_t active) const {
+	const auto count = br.seats.size();
+	if(br.teams) {
+		for(size_t i = 1; i < count; ++i) {
+			const auto s = static_cast<uint8_t>((active + i) % count);
+			if(br.seats[s].alive && br.seats[s].team != br.seats[active].team)
+				return s;
+		}
+	}
+	return battle_royal_next_alive(active);
 }
 uint8_t field::battle_royal_next_alive(uint8_t seat) const {
 	const auto count = br.seats.size();
@@ -1473,7 +1488,7 @@ void field::battle_royal_turn_start(uint8_t& turn_player) {
 		target = br.slot_seat[1 - turn_player];
 	} else {
 		active = battle_royal_next_alive(br.active_seat);
-		target = battle_royal_next_alive(active);
+		target = battle_royal_next_target(active);
 		uint8_t tp = turn_player;
 		if(seats[active].slot != PLAYER_NONE)
 			tp = seats[active].slot;
@@ -1553,17 +1568,39 @@ void field::battle_royal_win_check() {
 		message->write<uint8_t>(left);
 	}
 	br.alive_count = left;
-	if(left >= 2) {
+	// the duel goes on while 2+ seats (team battle royal: 2+ teams) are alive
+	bool over = left < 2;
+	if(!over && br.teams) {
+		over = true;
+		uint8_t team = PLAYER_NONE;
+		for(const auto& seat : br.seats) {
+			if(!seat.alive)
+				continue;
+			if(team == PLAYER_NONE)
+				team = seat.team;
+			else if(seat.team != team)
+				over = false;
+		}
+	}
+	if(!over) {
 		core.force_turn_end = true;
 		return;
 	}
 	uint8_t winp = PLAYER_NONE;
-	if(left == 1) {
-		uint8_t survivor = 0;
-		while(survivor < br.seats.size() && !br.seats[survivor].alive)
-			++survivor;
-		br.seats[survivor].placement = 1;
-		if(br.seats[survivor].slot == PLAYER_NONE) // both seats on the field fell at once
+	if(left >= 1) {
+		// a living seat of the winner (prefer one on the field); in a team battle royal the whole team wins
+		uint8_t survivor = PLAYER_NONE;
+		for(uint8_t s = 0; s < br.seats.size(); ++s) {
+			if(!br.seats[s].alive)
+				continue;
+			if(survivor == PLAYER_NONE || (br.seats[survivor].slot == PLAYER_NONE && br.seats[s].slot != PLAYER_NONE))
+				survivor = s;
+		}
+		for(auto& seat : br.seats) {
+			if(seat.alive || (br.teams && seat.team == br.seats[survivor].team))
+				seat.placement = 1;
+		}
+		if(br.seats[survivor].slot == PLAYER_NONE) // the seats on the field fell at once
 			seat_swap(0, survivor);
 		winp = br.seats[survivor].slot;
 	}

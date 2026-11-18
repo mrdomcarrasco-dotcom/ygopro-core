@@ -424,6 +424,10 @@
    seat and the other slot holds its target; every other seat's whole board is stored offstage.
    Mutually exclusive with DUEL_RELAY and with normal tag duels. */
 #define DUEL_BATTLE_ROYAL      0x2000000000
+/* Team Battle Royal (with DUEL_BATTLE_ROYAL): a seat's team is the team it was added with (OCG_DuelNewCard
+   team 0/1); a seat never targets a teammate and the duel ends when only one team has living seats
+   (MSG_WIN reports the slot of a seat of the winning team). */
+#define DUEL_BATTLE_ROYAL_TEAMS 0x4000000000
 #define DUEL_MODE_SPEED        (DUEL_3_COLUMNS_FIELD | DUEL_NO_MAIN_PHASE_2 | DUEL_TRAP_MONSTERS_NOT_USE_ZONE | DUEL_TRIGGER_ONLY_IN_LOCATION)
 #define DUEL_MODE_RUSH         (DUEL_3_COLUMNS_FIELD | DUEL_NO_MAIN_PHASE_2 | DUEL_NO_STANDBY_PHASE | DUEL_1ST_TURN_DRAW | DUEL_INVERTED_QUICK_PRIORITY | DUEL_DRAW_UNTIL_5 | DUEL_NO_HAND_LIMIT | DUEL_UNLIMITED_SUMMONS | DUEL_TRAP_MONSTERS_NOT_USE_ZONE | DUEL_TRIGGER_ONLY_IN_LOCATION | DUEL_EXTRA_DECK_RITUAL)
 #define DUEL_MODE_MR1          (DUEL_OCG_OBSOLETE_IGNITION | DUEL_1ST_TURN_DRAW | DUEL_1_FACEUP_FIELD | DUEL_SPSUMMON_ONCE_OLD_NEGATE | DUEL_RETURN_TO_DECK_TRIGGERS | DUEL_CANNOT_SUMMON_OATH_OLD)
