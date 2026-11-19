@@ -1564,8 +1564,9 @@ bool field::battle_royal_mass_begin(const chain& ch) {
 	if(!is_battle_royal() || br.mass_active)
 		return false;
 	const effect* peffect = ch.triggering_effect;
-	if(!peffect || ch.triggering_player != infos.turn_player || peffect->is_flag(EFFECT_FLAG_CARD_TARGET))
+	if(!peffect || peffect->is_flag(EFFECT_FLAG_CARD_TARGET))
 		return false;
+	const bool by_turn_player = ch.triggering_player == infos.turn_player;
 	constexpr uint64_t ops = 0x1 | 0x4 | 0x8 | 0x10 | 0x20 | 0x1000 | 0x4000; // destroy banish hand deck GY position negate
 	if(!(peffect->category & ops))
 		return false;
@@ -1573,7 +1574,9 @@ bool field::battle_royal_mass_begin(const chain& ch) {
 	int cls = handler ? br_mass_class(handler->data.code) : 0;
 	if(!cls && handler && handler->data.alias)
 		cls = br_mass_class(handler->data.alias);
-	if(!cls)
+	// the other duelist's mass effect (Torrential Tribute on your turn): "on the field" ones reach every board too;
+	// it sits in the target slot, so every other board takes that slot in turn and it comes back after
+	if(!cls || (!by_turn_player && cls != 2))
 		return false;
 	const uint8_t me = br.slot_seat[infos.turn_player];
 	const uint8_t tgt = br.slot_seat[1 - infos.turn_player];
