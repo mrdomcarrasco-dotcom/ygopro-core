@@ -4217,6 +4217,7 @@ bool field::process(Processors::SolveChain& arg) {
 	case 3 : {
 		effect* peffect = cait->triggering_effect;
 		card* pcard = peffect->get_handler();
+		br.mass_op_ran = false;
 		if((cait->flag & CHAIN_CONTINUOUS_CARD) && !pcard->is_has_relation(*cait)){
 			return FALSE;
 		}
@@ -4228,10 +4229,21 @@ bool field::process(Processors::SolveChain& arg) {
 		if(cait->triggering_effect->operation) {
 			core.sub_solving_event.push_back(cait->evt);
 			emplace_process<Processors::ExecuteOperation>(cait->triggering_effect, cait->triggering_player);
+			br.mass_op_ran = true;
 		}
 		return FALSE;
 	}
 	case 4: {
+		// Battle Royal: a mass effect runs again on every other board (field::battle_royal_mass_begin)
+		if(is_battle_royal() && !arg.backed_up_operation && (br.mass_active || br.mass_op_ran)) {
+			const bool ran = std::exchange(br.mass_op_ran, false);
+			if(!br.mass_active && ran)
+				battle_royal_mass_begin(*cait);
+			if(br.mass_active && battle_royal_mass_next()) {
+				arg.step = 2; // step 3 again: the operation on the board now in the target slot
+				return FALSE;
+			}
+		}
 		effect* peffect = cait->triggering_effect;
 		if(arg.backed_up_operation) {
 			if(peffect->operation != 0)

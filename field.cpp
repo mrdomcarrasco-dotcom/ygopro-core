@@ -14,6 +14,7 @@
 #include "duel.h"
 #include "effect.h"
 #include "field.h"
+#include "br_mass.h"
 #include "group.h"
 #include "interpreter.h"
 
@@ -1551,6 +1552,69 @@ void field::battle_royal_retarget(uint8_t seat) {
 	br.target_seat = seat;
 	battle_royal_write_state(MSG_SEAT_TARGET);
 	adjust_all();
+}
+// Mass effects (Raigeki, Dark Hole, Black Rose Dragon, Heavy Storm...): the core holds two boards, so once the turn
+// player's non-targeting mass effect has resolved on the live boards it runs again on every other board in turn
+// (br_mass.h, from the card texts: "... all ... on the field" = every board, "... your opponent controls" =
+// opponents only), then the original target comes back. Dominic 2026-11-19: Black Rose Dragon cleared Dartz's
+// board but not Vetrix's.
+bool field::battle_royal_mass_begin(const chain& ch) {
+	if(!is_battle_royal() || br.mass_active)
+		return false;
+	const effect* peffect = ch.triggering_effect;
+	if(!peffect || ch.triggering_player != infos.turn_player || peffect->is_flag(EFFECT_FLAG_CARD_TARGET))
+		return false;
+	constexpr uint64_t ops = 0x1 | 0x4 | 0x8 | 0x10 | 0x20 | 0x1000 | 0x4000; // destroy banish hand deck GY position negate
+	if(!(peffect->category & ops))
+		return false;
+	card* handler = peffect->get_handler();
+	int cls = handler ? br_mass_class(handler->data.code) : 0;
+	if(!cls && handler && handler->data.alias)
+		cls = br_mass_class(handler->data.alias);
+	if(!cls)
+		return false;
+	const uint8_t me = br.slot_seat[infos.turn_player];
+	const uint8_t tgt = br.slot_seat[1 - infos.turn_player];
+	if(me != br.active_seat)
+		return false;
+	br.mass_pending.clear();
+	for(uint8_t s = 0; s < br.seats.size(); ++s) {
+		if(s == me || s == tgt || !br.seats[s].alive)
+			continue;
+		const bool mate = br.teams && br.seats[s].team == br.seats[me].team;
+		if(cls == 1 && mate)
+			continue;
+		br.mass_pending.push_back(s);
+	}
+	if(br.mass_pending.empty())
+		return false;
+	br.mass_active = true;
+	br.mass_restore = tgt;
+	return true;
+}
+// the next board: true = swapped into the target slot, run the operation again; false = all done, target back
+bool field::battle_royal_mass_next() {
+	const uint8_t slot = 1 - infos.turn_player;
+	while(!br.mass_pending.empty()) {
+		const uint8_t s = br.mass_pending.front();
+		br.mass_pending.erase(br.mass_pending.begin());
+		if(!br.seats[s].alive)
+			continue;
+		seat_swap(slot, s);
+		br.target_seat = s;
+		battle_royal_write_state(MSG_SEAT_TARGET);
+		adjust_all();
+		return true;
+	}
+	br.mass_active = false;
+	const uint8_t back = std::exchange(br.mass_restore, static_cast<uint8_t>(0xff));
+	if(back < br.seats.size() && br.seats[back].alive && br.slot_seat[slot] != back) {
+		seat_swap(slot, back);
+		br.target_seat = back;
+		battle_royal_write_state(MSG_SEAT_TARGET);
+		adjust_all();
+	}
+	return false;
 }
 // The target fell during this turn: bring the next living opponent in (at the next open game state) so the
 // turn player can go on. Returns true when it swapped.

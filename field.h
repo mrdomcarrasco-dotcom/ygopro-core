@@ -148,6 +148,11 @@ struct battle_royal_info {
 	bool first_round_done{ false }; // every seat has finished its first turn
 	bool teams{ false }; // DUEL_BATTLE_ROYAL_TEAMS
 	uint8_t turn_slot{ 0 }; // engine slot of the turn player (MSG_SEAT_TURN / MSG_SEAT_TARGET)
+	// mass effects (battle_royal_mass_begin): the boards still to run it on, the target to bring back after
+	std::vector<uint8_t> mass_pending;
+	uint8_t mass_restore{ 0xff };
+	bool mass_active{ false };
+	bool mass_op_ran{ false }; // the chain link's operation ran (not negated)
 };
 struct field_effect {
 	using oath_effects = std::unordered_map<effect*, effect*>;
@@ -502,6 +507,8 @@ public:
 	bool battle_royal_can_target(uint8_t seat) const;
 	void battle_royal_retarget(uint8_t seat);
 	bool battle_royal_fix_target();
+	bool battle_royal_mass_begin(const chain& ch);
+	bool battle_royal_mass_next();
 	void battle_royal_write_state(uint8_t msgid);
 	void battle_royal_send_board(uint8_t seat);
 
