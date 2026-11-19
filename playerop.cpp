@@ -309,13 +309,33 @@ bool field::process(Processors::SelectCard& arg) {
 		}
 		arg.min = min;
 		arg.max = max;
+		std::sort(core.select_cards.begin(), core.select_cards.end(), card::card_operation_sort);
+		// Battle Royal: say which of these cards sit on an offstage board (their location info is ambiguous)
+		if(is_battle_royal()) {
+			std::vector<std::pair<uint32_t, uint8_t>> off;
+			for(uint32_t i = 0; i < core.select_cards.size(); ++i) {
+				const auto s = battle_royal_card_seat(core.select_cards[i]);
+				if(s != 0xff)
+					off.emplace_back(i, s);
+			}
+			if(!off.empty()) {
+				auto smsg = pduel->new_message(MSG_SEAT_SELECT);
+				smsg->write<uint32_t>(static_cast<uint32_t>(off.size()));
+				for(const auto& o : off) {
+					auto* pcard = core.select_cards[o.first];
+					smsg->write<uint32_t>(o.first);
+					smsg->write<uint8_t>(o.second);
+					smsg->write<uint8_t>(static_cast<uint8_t>(pcard->current.location));
+					smsg->write<uint32_t>(pcard->current.sequence);
+				}
+			}
+		}
 		auto message = pduel->new_message(MSG_SELECT_CARD);
 		message->write<uint8_t>(playerid);
 		message->write<uint8_t>(cancelable || min == 0);
 		message->write<uint32_t>(min);
 		message->write<uint32_t>(max);
 		message->write<uint32_t>((uint32_t)core.select_cards.size());
-		std::sort(core.select_cards.begin(), core.select_cards.end(), card::card_operation_sort);
 		for(auto& pcard : core.select_cards) {
 			message->write<uint32_t>(pcard->data.code);
 			message->write(pcard->get_info_location());

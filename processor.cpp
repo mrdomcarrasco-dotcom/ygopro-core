@@ -3756,6 +3756,7 @@ bool field::process(Processors::AddChain& arg) {
 		clit.replace_op = 0;
 		if(phandler->current.location == LOCATION_HAND)
 			clit.flag |= CHAIN_HAND_EFFECT;
+		clit.br_seat = is_battle_royal() ? br.slot_seat[clit.triggering_player] : 0xff;
 		core.current_chain.push_back(clit);
 		core.current_chain.back().applied_chain_counters = check_chain_counter(peffect, clit.triggering_player, clit.chain_count);
 		// triggered events which are not caused by RaiseEvent create relation with the handler
@@ -4179,6 +4180,8 @@ bool field::process(Processors::SolveChain& arg) {
 		return FALSE;
 	}
 	case 2: {
+		// Battle Royal: the board this link needs comes in first (an offstage target's, or the activator's own)
+		battle_royal_solve_prepare(*cait);
 		core.spsummon_state_count_tmp[0] = core.spsummon_state_count[0];
 		core.spsummon_state_count_tmp[1] = core.spsummon_state_count[1];
 		effect* peffect = cait->triggering_effect;
@@ -4378,6 +4381,7 @@ bool field::process(Processors::SolveChain& arg) {
 	}
 	case 12: {
 		core.used_event.splice(core.used_event.end(), core.point_event);
+		battle_royal_chain_end();
 		pduel->new_message(MSG_CHAIN_END);
 		reset_chain();
 		if((core.summoning_card || core.summoning_proc_group_type || core.effect_damage_step == 1) && core.reserved)

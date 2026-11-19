@@ -65,6 +65,7 @@ struct chain {
 	uint32_t triggering_sequence;
 	uint32_t triggering_status{};
 	uint32_t triggering_summon_type{};
+	uint8_t br_seat{ 0xff }; // Battle Royal: the seat that activated it
 	int32_t replace_op;
 	int32_t target_param;
 	uint32_t flag;
@@ -138,6 +139,7 @@ struct br_seat {
 	bool alive{ true };
 	uint8_t team{ 0 }; // team the seat was added with (DUEL_BATTLE_ROYAL_TEAMS)
 	bool had_turn{ false };
+	bool human{ false }; // Duel.BattleRoyalHuman: its selections may name cards on offstage boards
 };
 struct battle_royal_info {
 	std::vector<br_seat> seats;
@@ -153,6 +155,8 @@ struct battle_royal_info {
 	uint8_t mass_restore{ 0xff };
 	bool mass_active{ false };
 	bool mass_op_ran{ false }; // the chain link's operation ran (not negated)
+	uint8_t chain_restore{ 0xff }; // target seat to bring back when the chain ends (boards swapped to resolve links)
+	uint8_t human_mask{ 0 }; // Duel.BattleRoyalHuman before the seats exist (applied by battle_royal_init)
 };
 struct field_effect {
 	using oath_effects = std::unordered_map<effect*, effect*>;
@@ -508,6 +512,11 @@ public:
 	void battle_royal_retarget(uint8_t seat);
 	bool battle_royal_fix_target();
 	bool battle_royal_mass_begin(const chain& ch);
+	uint8_t battle_royal_card_seat(card* pcard) const; // the offstage seat holding this card, 0xff: none
+	bool battle_royal_offstage_targeting(uint8_t self) const;
+	void battle_royal_temp_target(uint8_t seat);
+	void battle_royal_solve_prepare(chain& ch);
+	void battle_royal_chain_end();
 	bool battle_royal_mass_next();
 	void battle_royal_write_state(uint8_t msgid);
 	void battle_royal_send_board(uint8_t seat);

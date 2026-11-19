@@ -2673,6 +2673,18 @@ LUA_STATIC_FUNCTION(GetTargetCount) {
 * \param filter_func, self, location1, location2, count, exception card, (extraargs...)
 * \return boolean
 */
+// Battle Royal: this seat is a person (the server calls it before the duel starts): its targeting may name cards
+// on offstage boards (bots keep the two live boards: WindBot only knows those)
+LUA_STATIC_FUNCTION(BattleRoyalHuman) {
+	check_param_count(L, 1);
+	const auto seat = lua_get<uint8_t>(L, 1);
+	auto& br = pduel->game_field->br;
+	if(seat < 8)
+		br.human_mask |= static_cast<uint8_t>(1u << seat);
+	if(seat < br.seats.size())
+		br.seats[seat].human = true;
+	return 0;
+}
 LUA_STATIC_FUNCTION(IsExistingTarget) {
 	check_param_count(L, 6);
 	const auto findex = lua_get<function>(L, 1);
@@ -2742,7 +2754,7 @@ LUA_STATIC_FUNCTION(SelectTarget) {
 				auto pret = pduel->new_group(pduel->game_field->return_cards.list);
 				for(auto& pcard : pret->container) {
 					pcard->create_relation(*ch);
-					if(peffect->is_flag(EFFECT_FLAG_CARD_TARGET)) {
+					if(peffect->is_flag(EFFECT_FLAG_CARD_TARGET) && pduel->game_field->battle_royal_card_seat(pcard) == 0xff) {
 						auto message = pduel->new_message(MSG_BECOME_TARGET);
 						message->write<uint32_t>(1);
 						message->write(pcard->get_info_location());

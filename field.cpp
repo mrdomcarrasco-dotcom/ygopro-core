@@ -1352,6 +1352,8 @@ void field::battle_royal_init() {
 	br.alive_count = static_cast<uint8_t>(br.seats.size());
 	br.teams = is_flag(DUEL_BATTLE_ROYAL_TEAMS);
 	// the seats that start offstage: their (hand/deck/Extra Deck only) boards
+	for(uint8_t s = 0; s < br.seats.size() && s < 8; ++s)
+		br.seats[s].human = (br.human_mask >> s) & 1;
 	for(uint8_t s = 2; s < br.seats.size(); ++s)
 		battle_royal_send_board(s);
 }
@@ -1615,6 +1617,72 @@ bool field::battle_royal_mass_next() {
 		adjust_all();
 	}
 	return false;
+}
+// ---- every board in reach (Dominic 2026-11-19: "there should be no reason I can't chain-target the other
+// person's board with Mystical Space Typhoon"). The core holds two boards; a human turn player's targeting
+// (filter_matching_card with is_target) also offers the matching cards of the offstage enemy boards, the chain
+// link keeps them as targets, and when a link resolves the board it needs comes into the target slot first:
+// the board of an offstage target for the turn player's links, the activator's own board for the other links.
+// When the chain ends the target the turn player chose comes back.
+uint8_t field::battle_royal_card_seat(card* pcard) const {
+	if(!pcard || !is_battle_royal())
+		return 0xff;
+	for(uint8_t s = 0; s < br.seats.size(); ++s) {
+		const auto& seat = br.seats[s];
+		if(seat.slot != PLAYER_NONE)
+			continue;
+		for(const auto* list : { &seat.list_mzone, &seat.list_szone, &seat.list_grave, &seat.list_remove, &seat.list_hand, &seat.list_extra, &seat.list_main })
+			if(std::find(list->begin(), list->end(), pcard) != list->end())
+				return s;
+	}
+	return 0xff;
+}
+bool field::battle_royal_offstage_targeting(uint8_t self) const {
+	if(!is_battle_royal() || br.mass_active || self > 1 || self != infos.turn_player)
+		return false;
+	const uint8_t me = br.slot_seat[self];
+	return me < br.seats.size() && br.seats[me].human;
+}
+void field::battle_royal_temp_target(uint8_t seat) {
+	const uint8_t slot = 1 - infos.turn_player;
+	if(seat >= br.seats.size() || br.slot_seat[slot] == seat || !br.seats[seat].alive)
+		return;
+	seat_swap(slot, seat);
+	br.target_seat = seat;
+	battle_royal_write_state(MSG_SEAT_TARGET);
+	adjust_all();
+}
+void field::battle_royal_solve_prepare(chain& ch) {
+	if(!is_battle_royal() || br.mass_active)
+		return;
+	const uint8_t slot = 1 - infos.turn_player;
+	uint8_t need = 0xff;
+	if(ch.triggering_player == infos.turn_player) {
+		if(ch.target_cards)
+			for(auto* pcard : ch.target_cards->container) {
+				const auto s = battle_royal_card_seat(pcard);
+				if(s != 0xff) { need = s; break; }
+			}
+	} else if(ch.br_seat < br.seats.size() && br.seats[ch.br_seat].slot == PLAYER_NONE) {
+		need = ch.br_seat; // an opponent's link resolves with its own board in
+	}
+	if(need != 0xff && need != br.slot_seat[infos.turn_player] && br.seats[need].alive) {
+		if(br.chain_restore == 0xff)
+			br.chain_restore = br.slot_seat[slot];
+		battle_royal_temp_target(need);
+	}
+	// targets still on an offstage board (two boards picked for one link) can't be reached: they fizzle
+	if(ch.target_cards)
+		for(auto* pcard : ch.target_cards->container)
+			if(battle_royal_card_seat(pcard) != 0xff)
+				pcard->release_relation(ch);
+}
+void field::battle_royal_chain_end() {
+	if(!is_battle_royal())
+		return;
+	const uint8_t back = std::exchange(br.chain_restore, static_cast<uint8_t>(0xff));
+	if(back < br.seats.size() && br.seats[back].alive && back != br.slot_seat[infos.turn_player])
+		battle_royal_temp_target(back);
 }
 // The target fell during this turn: bring the next living opponent in (at the next open game state) so the
 // turn player can go on. Returns true when it swapped.
@@ -2119,6 +2187,7 @@ void field::filter_player_effect(uint8_t playerid, uint32_t code, effect_set* es
 int32_t field::filter_matching_card(int32_t findex, uint8_t self, uint32_t location1, uint32_t location2, group* pgroup, card* pexception, group* pexgroup, uint32_t extraargs, card** pret, int32_t fcount, bool is_target) {
 	if(self != 0 && self != 1)
 		return FALSE;
+	const uint8_t self0 = self;
 	int32_t count = 0;
 	auto checkc = [&](auto* pcard, bool(*extrafil)(card* pcard)=nullptr)->bool {
 		if(pcard && (!extrafil || extrafil(pcard))
@@ -2200,6 +2269,33 @@ int32_t field::filter_matching_card(int32_t findex, uint8_t self, uint32_t locat
 			return TRUE;
 		if((location & LOCATION_REMOVED) && check_list(player[self].list_remove, checkc))
 			return TRUE;
+	}
+	// Battle Royal: a human turn player's targets may sit on an offstage enemy board (see battle_royal_card_seat)
+	if(is_target && location2 && battle_royal_offstage_targeting(self0)) {
+		const uint8_t opp = 1 - self0;
+		const uint8_t me = br.slot_seat[self0];
+		for(uint8_t s = 0; s < br.seats.size(); ++s) {
+			auto& seat = br.seats[s];
+			if(seat.slot != PLAYER_NONE || !seat.alive || (br.teams && seat.team == br.seats[me].team))
+				continue;
+			auto test = [&](card* pcard, bool monster)->bool {
+				if(!pcard)
+					return false;
+				const auto keep = pcard->current.controler;
+				pcard->current.controler = opp; // looks like the opponent's card to the filter
+				const bool done = monster ? mzonechk(pcard) : checkc(pcard);
+				pcard->current.controler = keep;
+				return done;
+			};
+			if(location2 & LOCATION_MZONE)
+				for(auto* pcard : seat.list_mzone) if(test(pcard, true)) return TRUE;
+			if(location2 & LOCATION_SZONE)
+				for(auto* pcard : seat.list_szone) if(test(pcard, false)) return TRUE;
+			if(location2 & LOCATION_GRAVE)
+				for(auto* pcard : seat.list_grave) if(test(pcard, false)) return TRUE;
+			if(location2 & LOCATION_REMOVED)
+				for(auto* pcard : seat.list_remove) if(test(pcard, false)) return TRUE;
+		}
 	}
 	return FALSE;
 }

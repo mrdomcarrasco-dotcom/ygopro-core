@@ -303,6 +303,7 @@
 /* 169 = MSG_SEAT_INFO (made by the EDOPRO server) */
 #define MSG_SEAT_TARGET          171
 #define MSG_SEAT_BOARD           172
+#define MSG_SEAT_SELECT          173 // u32 n, per entry: u32 index into the next MSG_SELECT_CARD, u8 seat, u8 location, u32 sequence
 #define MSG_MATCH_KILL           170
 #define MSG_CUSTOM_MSG           180
 #define MSG_REMOVE_CARDS         190
