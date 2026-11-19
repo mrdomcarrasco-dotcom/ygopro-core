@@ -1465,8 +1465,9 @@ bool field::process(Processors::IdleCommand& arg) {
 		}
 		core.to_bp = true;
 		core.to_ep = true;
-		// battle royal: nobody attacks until every seat has had a turn
-		const bool no_bp_first_turn = is_battle_royal() ? battle_royal_first_round() : (!is_flag(DUEL_ATTACK_FIRST_TURN) && infos.turn_id == 1);
+		// Battle Royal: like any duel, only the very first turn has no Battle Phase (Dominic 2026-11-19: going second you
+		// attack on your first turn; the old "nobody attacks in the first round" rule is gone)
+		const bool no_bp_first_turn = !is_flag(DUEL_ATTACK_FIRST_TURN) && infos.turn_id == 1;
 		if((no_bp_first_turn && !(is_player_affected_by_effect(infos.turn_player, EFFECT_BP_FIRST_TURN))) || infos.phase == PHASE_MAIN2 || is_player_affected_by_effect(infos.turn_player, EFFECT_CANNOT_BP) || core.force_turn_end)
 			core.to_bp = false;
 		if(infos.phase == PHASE_MAIN1) {
