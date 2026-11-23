@@ -1465,9 +1465,8 @@ bool field::process(Processors::IdleCommand& arg) {
 		}
 		core.to_bp = true;
 		core.to_ep = true;
-		// Battle Royal: like any duel, only the very first turn has no Battle Phase (Dominic 2026-11-19: going second you
-		// attack on your first turn; the old "nobody attacks in the first round" rule is gone)
-		const bool no_bp_first_turn = !is_flag(DUEL_ATTACK_FIRST_TURN) && infos.turn_id == 1;
+		// Battle Royal: no Battle Phase while no enemy has had a turn (battle_royal_next_target)
+		const bool no_bp_first_turn = is_battle_royal() ? !battle_royal_can_battle() : (!is_flag(DUEL_ATTACK_FIRST_TURN) && infos.turn_id == 1);
 		if((no_bp_first_turn && !(is_player_affected_by_effect(infos.turn_player, EFFECT_BP_FIRST_TURN))) || infos.phase == PHASE_MAIN2 || is_player_affected_by_effect(infos.turn_player, EFFECT_CANNOT_BP) || core.force_turn_end)
 			core.to_bp = false;
 		if(infos.phase == PHASE_MAIN1) {
@@ -1816,6 +1815,15 @@ bool field::process(Processors::BattleCommand& arg) {
 			arg.step = Processors::restart;
 			return FALSE;
 		}
+		// battle royal: facing a player who hasn't had a turn (targeted in the Main Phase): attack one who has
+		if(is_battle_royal() && !core.force_turn_end && br.target_seat < br.seats.size() && !br.seats[br.target_seat].had_turn) {
+			const auto next = battle_royal_next_target(br.active_seat);
+			if(next != br.target_seat && br.seats[next].had_turn) {
+				battle_royal_retarget(next);
+				arg.step = Processors::restart;
+				return FALSE;
+			}
+		}
 		if(auto peffect = is_player_affected_by_effect(infos.turn_player, EFFECT_SKIP_BP); peffect != nullptr || core.force_turn_end) {
 			arg.step = 41;
 			arg.phase_to_change_to = 2;
@@ -1858,7 +1866,8 @@ bool field::process(Processors::BattleCommand& arg) {
 		core.attackable_cards.clear();
 		card_vector first_attack;
 		card_vector must_attack;
-		if(!is_player_affected_by_effect(infos.turn_player, EFFECT_CANNOT_ATTACK_ANNOUNCE)) {
+		const bool br_untouchable = is_battle_royal() && (br.target_seat >= br.seats.size() || !br.seats[br.target_seat].had_turn);
+		if(!br_untouchable && !is_player_affected_by_effect(infos.turn_player, EFFECT_CANNOT_ATTACK_ANNOUNCE)) {
 			for(auto& pcard : player[infos.turn_player].list_mzone) {
 				if(!pcard)
 					continue;

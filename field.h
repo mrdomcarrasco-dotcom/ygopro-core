@@ -507,6 +507,9 @@ public:
 	bool battle_royal_first_round() const;
 	uint8_t battle_royal_next_alive(uint8_t seat) const;
 	uint8_t battle_royal_next_target(uint8_t active) const;
+	uint8_t battle_royal_next_turn(uint8_t seat) const;
+	bool battle_royal_enemy(uint8_t seat, uint8_t of) const;
+	bool battle_royal_can_battle() const;
 	void battle_royal_refresh_owners();
 	bool battle_royal_can_target(uint8_t seat) const;
 	void battle_royal_retarget(uint8_t seat);

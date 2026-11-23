@@ -1358,16 +1358,45 @@ void field::battle_royal_init() {
 		battle_royal_send_board(s);
 }
 // the seat "active" attacks: the next living seat in turn order, skipping its teammates in a team battle royal
+bool field::battle_royal_enemy(uint8_t seat, uint8_t of) const {
+	return seat < br.seats.size() && of < br.seats.size() && seat != of && br.seats[seat].alive && !(br.teams && br.seats[seat].team == br.seats[of].team);
+}
+// Dominic 2026-11-22: a player who hasn't had a turn yet can't be attacked. The default target is the next enemy who
+// has had one (else the next enemy: only effects can reach it).
 uint8_t field::battle_royal_next_target(uint8_t active) const {
 	const auto count = br.seats.size();
-	if(br.teams) {
+	for(const bool played : { true, false }) {
 		for(size_t i = 1; i < count; ++i) {
 			const auto s = static_cast<uint8_t>((active + i) % count);
-			if(br.seats[s].alive && br.seats[s].team != br.seats[active].team)
+			if(battle_royal_enemy(s, active) && (!played || br.seats[s].had_turn))
 				return s;
 		}
 	}
 	return battle_royal_next_alive(active);
+}
+// can the turn player attack anyone: an enemy who has had a turn
+bool field::battle_royal_can_battle() const {
+	for(uint8_t s = 0; s < br.seats.size(); ++s)
+		if(battle_royal_enemy(s, br.active_seat) && br.seats[s].had_turn)
+			return true;
+	return false;
+}
+// whose turn comes next. Teams (Dominic 2026-11-22): all of team 1, then all of team 2; free-for-all: seat order
+uint8_t field::battle_royal_next_turn(uint8_t seat) const {
+	if(!br.teams)
+		return battle_royal_next_alive(seat);
+	std::vector<uint8_t> order;
+	for(uint8_t team = 0; team < 2; ++team)
+		for(uint8_t s = 0; s < br.seats.size(); ++s)
+			if(br.seats[s].team == team)
+				order.push_back(s);
+	const auto at = static_cast<size_t>(std::find(order.begin(), order.end(), seat) - order.begin());
+	for(size_t i = 1; i <= order.size(); ++i) {
+		const auto s = order[(at + i) % order.size()];
+		if(br.seats[s].alive)
+			return s;
+	}
+	return seat;
 }
 uint8_t field::battle_royal_next_alive(uint8_t seat) const {
 	const auto count = br.seats.size();
@@ -1497,7 +1526,7 @@ void field::battle_royal_turn_start(uint8_t& turn_player) {
 		active = br.slot_seat[turn_player];
 		target = br.slot_seat[1 - turn_player];
 	} else {
-		active = battle_royal_next_alive(br.active_seat);
+		active = battle_royal_next_turn(br.active_seat);
 		target = battle_royal_next_target(active);
 		uint8_t tp = turn_player;
 		if(seats[active].slot != PLAYER_NONE)
@@ -1542,6 +1571,9 @@ bool field::battle_royal_can_target(uint8_t seat) const {
 	if(seat == br.active_seat || seat == br.target_seat || !br.seats[seat].alive)
 		return false;
 	if(br.teams && br.seats[seat].team == br.seats[br.active_seat].team)
+		return false;
+	// in battle only players who have had a turn (Main Phase: effects may reach anyone)
+	if(infos.phase >= PHASE_BATTLE_START && infos.phase <= PHASE_BATTLE && !br.seats[seat].had_turn)
 		return false;
 	return br.seats[br.active_seat].alive;
 }
