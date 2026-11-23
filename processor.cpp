@@ -2180,6 +2180,16 @@ bool field::process(Processors::BattleCommand& arg) {
 		return FALSE;
 	}
 	case 9: {
+		// a battle forced during this attack (Last Turn) ran and cleared it: this one is over
+		if(!core.attacker) {
+			core.chain_attack = false;
+			if(arg.forced_attack) {
+				returns.set<int32_t>(0, 2);
+				arg.step = 0;
+			} else
+				arg.step = Processors::restart;
+			return FALSE;
+		}
 		if(is_player_affected_by_effect(infos.turn_player, EFFECT_SKIP_BP)
 			|| core.attacker->is_status(STATUS_ATTACK_CANCELED) || core.attack_rollback) {
 			arg.step = 10;
@@ -2206,6 +2216,16 @@ bool field::process(Processors::BattleCommand& arg) {
 		return FALSE;
 	}
 	case 11: {
+		// a battle forced during this attack (Last Turn) ran and cleared it: this one is over
+		if(!core.attacker) {
+			core.chain_attack = false;
+			if(arg.forced_attack) {
+				returns.set<int32_t>(0, 2);
+				arg.step = 0;
+			} else
+				arg.step = Processors::restart;
+			return FALSE;
+		}
 		if(core.attacker->is_affected_by_effect(EFFECT_ATTACK_DISABLED)) {
 			core.attacker->reset(EFFECT_ATTACK_DISABLED, RESET_CODE);
 			pduel->new_message(MSG_ATTACK_DISABLED);
